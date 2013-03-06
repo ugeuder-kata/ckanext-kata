@@ -1,3 +1,4 @@
+import logging
 import sys
 import re
 from pprint import pprint
@@ -38,7 +39,27 @@ class Kata(CkanCommand):
         super(Kata,self).__init__(name)
 
     def command(self):
+        global req_log
         self._load_config()
+        # if a logger is created before _load_config is called it will be in
+        # disabled [1] state after _load_config has been called. This happens
+        # indepently whether it's a logger that is configured in the ini file
+        # (e.g. kataext), a child thereof (e.g. kataext.foo) or something
+        # completely disjoint (foo). So creating a logger called ckanext.kata
+        # globally in this file (which is before _load_config is called) will
+        # break even existing logging using name ckanext.kata in other source
+        # files.  (Because loggers with the same name exist only once,
+        # regardless how often getLogger is called. The same instance is
+        # returned everywhere)
+        #
+        # [1] I didn't see a member variable disabled documented. But it
+        # exists and it does what you would expect from its name.  Actually
+        # documentation of function logging.config.fileConfig mentions
+        # disabling existing loggers. According to the documentation disabling
+        # should not affect if the loggers or their ancestors are mentioned in
+        # the config file. This restriction did not seem to be true in my
+        # testing, however.
+        req_log = logging.getLogger('ckanext.kata.request_emails')
 
         if len(self.args) == 0:
             self.parser.print_usage()
@@ -50,6 +71,7 @@ class Kata(CkanCommand):
         elif cmd == 'harvest_sources':
             self.harvest_sources()
         elif cmd == 'send_request_emails':
+            req_log.debug("calling send_emails")
             self.send_emails()
         else:
             print 'Command %s not recognized' % cmd
@@ -82,12 +104,17 @@ class Kata(CkanCommand):
 
     def send_emails(self):
         all_reqs = model.Session.query(KataAccessRequest).all()
+        req_log.debug( "access requests: {0:d}".format(len(all_reqs)))
         curdate = datetime.datetime.utcnow()
         for req in all_reqs:
             try:
+                req_log.debug( "curdate {0}, created {1}".format(str(curdate),
+                                                          str(req.created)))
                 if (curdate - req.created) > timedelta(days=1):
+                    req_log.debug("send_email")
                     send_email(req)
                 else:
+                    req_log.debug("delete")
                     req.delete()
             except Exception, me:
                 print "Couldn't send email! Details:\n%s" % me
